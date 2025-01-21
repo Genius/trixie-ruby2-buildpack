@@ -1,0 +1,14 @@
+api = "0.10"
+
+[buildpack]
+id = "genius/trixie-ruby2"
+version = "0.0.1"
+name = "Trixie's Ruby2"
+openssl_version = "1.1.1w"
+
+[[targets]]
+os = "linux"
+arch = "amd64"
+
+[[stacks]]
+id = "heroku-24"

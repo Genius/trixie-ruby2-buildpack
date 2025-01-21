@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+BP_DIR=`cd $(dirname $0); cd ..; pwd`
+BUILD_DIR=$1
+CACHE_DIR=$2
+ENV_DIR=$3
+
+set -eu
+
+echo "-----> OpenSSL 1.1.1w: fechting binaries"
+mkdir -p $HOME/vendor/openssl
+cd $HOME/vendor
+curl https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz -L -s -o - | tar xzf -
+echo "-----> OpenSSL 1.1.1w: installing..."
+cd ./openssl-1.1.1w
+./config --prefix=$HOME/vendor/openssl no-autoalginit no-autoerrinit
+make
+make test
+make install
+cd $HOME
+rm -rf $HOME/vendor/openssl-1.1.1w
+echo "-----> OpenSSL 1.1.1w: ready!"
+
+echo "-----> Ruby 2.7.8: fetching binaries"
+mkdir -p $HOME/vendor/ruby
+cd $HOME/vendor
+curl https://cache.ruby-lang.org/pub/ruby/2.7/ruby-2.7.8.tar.xz -L -s -o - | tar -xJf -
+echo "-----> Ruby 2.7.8: installing..."
+cd ./ruby-2.7.8
+autoconf
+{ \
+  echo '#define ENABLE_PATH_CHECK 0'; \
+  echo; \
+  cat file.c; \
+} > file.c.new
+mv file.c.new file.c
+gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"
+./configure \
+  --build="$gnuArch" \
+  --prefix=$HOME/vendor/ruby \
+  --enable-shared \
+  --with-openssl-dir=$HOME/vendor/openssl \
+  --disable-install-doc
+make -j "$(nproc)"
+make install
+cd $HOME
+rm -rf $HOME/vendor/ruby-2.7.8
+PATH=$HOME/vendor/ruby/bin:$PATH
+RUBYLIB=$HOME/vendor/ruby/lib/ruby/2.7.8/:$HOME/vendor/ruby/lib/ruby/2.0.0/x86_64-linux/
+GEM_PATH=$HOME/vendor/ruby/lib/ruby/gems/2.7.8/
+LD_LIBRARY_PATH=$HOME/vendor/openssl/lib/
+echo "-----> Ruby 2.7.8: checking..."
+ruby --version
+gem --version
+bundle --version
+echo "-----> Ruby 2.7.8: ready!"
+
+echo "-----> Bundler 1.17.2: installing..."
+gem install bundler:1.17.2
+echo "-----> Bundler 1.17.2: checking..."
+bundle --version
+echo "-----> Bundler 1.17.2: ready!"
+
+# echo "-----> Copying .profile.d scripts"
+# echo "-----> from: $BP_DIR"
+# echo "-----> to: $HOME"
+# mkdir -p $HOME/.profile.d/
+# cp ${BP_DIR}/.profile.d/* $HOME/.profile.d/

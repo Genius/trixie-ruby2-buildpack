@@ -1,0 +1,114 @@
+#!/bin/sh
+
+if [ "$STACK" != "heroku-24" ]; then
+  echo "Unexpected stack version: $STACK"
+  exit 100
+fi
+
+# chown -R $(whoami) /
+
+set -eux
+
+# mkdir -p /usr/local/etc
+# { \
+#   echo 'install: --no-document'; \
+#   echo 'update: --no-document'; \
+# } >> /usr/local/etc/gemrc
+
+# apt-get update
+# apt-get install -y --no-install-recommends \
+#   wget \
+#   autoconf \
+#   build-essential \
+#   bison \
+#   dpkg-dev \
+#   libgdbm-dev
+# rm -rf /var/lib/apt/lists/*
+
+# cd /usr/local/src/
+wget --no-check-certificate -O openssl.tar.gz https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz
+opensslSha256=cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+echo "$opensslSha256 *openssl.tar.gz" | sha256sum -cs
+
+tar -xf openssl.tar.gz
+cd ./openssl
+./config --prefix=/opt/openssl --openssldir=/usr/local/ssl
+make
+make test
+make install
+
+wget --no-check-certificate -O libssl.deb https://security.debian.org/pool/updates/main/o/openssl/libssl1.1_1.1.1w-0+deb11u2_amd64.deb
+libsslSha256=d19ed898beea243434571615aa95127d48cf38d0905f15a80dd9b4d0e71b4f3a
+echo "$libsslSha256 *libssl.deb" | sha256sum -cs
+dpkg -i libssl.deb
+
+wget --no-check-certificate -O libssl-dev.deb https://security.debian.org/pool/updates/main/o/openssl/libssl-dev_1.1.1w-0+deb11u2_amd64.deb
+libssldevSha256=8236d9d4e185df950f451e771622a43f09ffff96d652e316b8e0990f4b193634
+echo "$libssldevSha256 *libssl-dev.deb" | sha256sum -cs
+dpkg -i libssl-dev.deb
+
+# some of ruby's build scripts are written in ruby
+#   we purge system ruby later to make sure our final image uses what we just built
+savedAptMark="$(apt-mark showmanual)"
+wget --no-check-certificate -O ruby.tar.xz "https://cache.ruby-lang.org/pub/ruby/${RUBY_MAJOR%-rc}/ruby-$RUBY_VERSION.tar.xz"
+rubySha256=f22f662da504d49ce2080e446e4bea7008cee11d5ec4858fc69000d0e5b1d7fb
+echo "$rubySha256 *ruby.tar.xz" | sha256sum -cs
+
+mkdir -p /usr/src/ruby
+tar -xJf ruby.tar.xz -C /usr/src/ruby --strip-components=1
+rm ruby.tar.xz
+
+cd /usr/src/ruby
+
+# hack in "ENABLE_PATH_CHECK" disabling to suppress:
+#   warning: Insecure world writable dir
+{ \
+  echo '#define ENABLE_PATH_CHECK 0'; \
+  echo; \
+  cat file.c; \
+} > file.c.new
+mv file.c.new file.c
+
+autoconf
+gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"
+./configure \
+  --build="$gnuArch" \
+  --disable-install-doc \
+  --enable-shared \
+  --with-openssl-dir=/usr/local/ssl \
+  --with-gdbm-dir=/usr/lib/x86_64-linux-gnu
+make -j "$(nproc)"
+make install
+
+apt-mark auto '.*' > /dev/null
+apt-mark manual $savedAptMark > /dev/null
+find /usr/local -type f -executable -not \( -name '*tkinter*' \) -exec ldd '{}' ';' \
+  | awk '/=>/ { print $(NF-1) }' \
+  | sort -u \
+  | grep -vE '^/usr/local/lib/' \
+  | xargs -r dpkg-query --search \
+  | cut -d: -f1 \
+  | sort -u \
+  | xargs -r apt-mark manual
+apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false
+
+cd /
+rm -r /usr/src/ruby
+
+# verify we have no "ruby" packages installed
+if dpkg -l | grep -i ruby; then exit 1; fi
+[ "$(command -v ruby)" = '/usr/local/bin/ruby' ]
+
+# rough smoke test
+ruby --version; \
+gem --version; \
+bundle --version
+
+# don't create ".bundle" in all our apps
+export GEM_HOME=/usr/local/bundle
+export BUNDLE_SILENCE_ROOT_WARNING=1
+export BUNDLE_APP_CONFIG="$GEM_HOME"
+export PATH=$GEM_HOME/bin:$PATH
+
+# adjust permissions of a few directories for running "gem install" as an arbitrary user
+mkdir -p "$GEM_HOME" && chmod 1777 "$GEM_HOME"
